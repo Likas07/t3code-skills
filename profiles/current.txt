@@ -16,15 +16,12 @@ app-store-optimizer
 audit-website
 autonomous-optimization-architect
 backend-architect
-baidu-seo-specialist
 behavioral-nudge-engine
-bilibili-content-strategist
 blockchain-security-auditor
 book-co-author
 brand-guardian
 canvas-design
 carousel-growth-engine
-china-e-commerce-operator
 code-review
 code-reviewer
 competitor-alternatives
@@ -32,7 +29,6 @@ compliance-auditor
 content-creator
 content-strategy
 copywriting
-corporate-training-designer
 crafting-effective-readmes
 cross-border-e-commerce-specialist
 cultural-intelligence-strategist
@@ -49,7 +45,6 @@ doc-coauthoring
 document-generator
 docx
 domain-name-brainstormer
-douyin-strategist
 draw-io
 email-sequence
 embedded-firmware-engineer
@@ -58,7 +53,6 @@ executive-summary-generator
 experiment-tracker
 feedback-mastery
 feedback-synthesizer
-feishu-integration-developer
 finance-tracker
 finishing-a-development-branch
 frontend-developer
@@ -69,9 +63,7 @@ git-workflow-master
 godot-gameplay-scripter
 godot-multiplayer-engineer
 godot-shader-developer
-government-digital-presales-consultant
 growth-hacker
-healthcare-marketing-compliance-specialist
 identity-graph-operator
 image-prompt-engineer
 incident-response-commander
@@ -79,7 +71,6 @@ inclusive-visuals-specialist
 infrastructure-maintainer
 instagram-curator
 jira-workflow-steward
-kuaishou-strategist
 launch-strategy
 legal-compliance-checker
 level-designer
@@ -104,7 +95,6 @@ paid-social-strategist
 pdf
 performance-benchmarker
 pipeline-analyst
-podcast-strategist
 ppc-campaign-strategist
 pptx
 pricing-strategy
@@ -118,7 +108,6 @@ project-shepherd
 proposal-strategist
 rapid-prototyper
 reality-checker
-recruitment-specialist
 reddit-community-builder
 reducing-entropy
 report-distribution-agent
@@ -145,8 +134,6 @@ sprint-prioritizer
 sre-site-reliability-engineer
 studio-operations
 studio-producer
-study-abroad-advisor
-supply-chain-strategist
 support-responder
 systematic-debugging
 technical-artist
@@ -178,16 +165,11 @@ visionos-spatial-engineer
 visual-storyteller
 web-design-guidelines
 web-to-markdown
-wechat-mini-program-developer
-wechat-official-account-manager
-weibo-strategist
 whimsy-injector
 workflow-optimizer
 writing-quality
-xiaohongshu-specialist
 xlsx
 xr-cockpit-interaction-specialist
 xr-immersive-developer
 xr-interface-architect
-zhihu-strategist
 zk-steward
