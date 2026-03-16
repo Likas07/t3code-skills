@@ -1,0 +1,79 @@
+# Skill categories for the skills manager
+# Format: category: [skill-name, ...]
+
+dev-workflow:
+  - code-review
+  - finishing-a-development-branch
+  - reducing-entropy
+  - systematic-debugging
+  - test-driven-development
+  - using-git-worktrees
+  - using-superpowers
+
+marketing:
+  - ab-test-setup
+  - analytics-tracking
+  - competitor-alternatives
+  - content-strategy
+  - copywriting
+  - email-sequence
+  - launch-strategy
+  - marketing-ideas
+  - marketing-psychology
+  - paid-ads
+  - product-marketing-context
+  - programmatic-seo
+  - social-content
+
+cro:
+  - marketing-page-cro
+  - product-flow-cro
+
+seo:
+  - audit-website
+
+docs-and-writing:
+  - api-handoff-docs
+  - crafting-effective-readmes
+  - doc-coauthoring
+  - professional-communication
+  - writing-quality
+
+diagrams:
+  - draw-io
+  - mermaid-diagrams
+
+office-formats:
+  - docx
+  - pdf
+  - pptx
+  - xlsx
+
+design:
+  - canvas-design
+  - design-system-starter
+  - marp-slide
+  - theme-factory
+  - web-design-guidelines
+
+backend:
+  - database-schema-designer
+  - logging-best-practices
+
+meta:
+  - agent-md-refactor
+  - mcp-builder
+  - skill-creator
+  - skill-judge
+
+product:
+  - game-changing-features
+  - pricing-strategy
+  - ship-learn-next
+
+comms:
+  - feedback-mastery
+
+utility:
+  - domain-name-brainstormer
+  - web-to-markdown

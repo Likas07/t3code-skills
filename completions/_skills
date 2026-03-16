@@ -1,0 +1,172 @@
+#compdef skills
+
+_skills_library_home() {
+    echo "$HOME/.skill-library"
+}
+
+_skills_target_value() {
+    local i target
+    target="${SKILLS_TARGET:-claude}"
+    for (( i=1; i <= ${#words}; i++ )); do
+        case "${words[i]}" in
+            --target)
+                if (( i + 1 <= ${#words} )); then
+                    target="${words[i+1]}"
+                fi
+                ;;
+            --target=*)
+                target="${words[i]#--target=}"
+                ;;
+        esac
+    done
+    echo "$target"
+}
+
+_skills_symlink_dir() {
+    case "$(_skills_target_value)" in
+        codex)  echo "$HOME/.codex/skills" ;;
+        *)      echo "$HOME/.claude/skills" ;;
+    esac
+}
+
+_skills_command_index() {
+    local i=2
+    while (( i <= ${#words} )); do
+        case "${words[i]}" in
+            --target) ((i+=2)); continue ;;
+            --target=*) ((i++)); continue ;;
+            -*) ((i++)); continue ;;
+            *) echo "$i"; return ;;
+        esac
+    done
+    echo 0
+}
+
+_skills_all_names() {
+    local lib_home
+    local -a names
+    lib_home="$(_skills_library_home)"
+    names=( ${(f)"$(ls -1 "$lib_home/skills" 2>/dev/null | grep -v '^\.')"} )
+    _describe 'skill' names
+}
+
+_skills_active_names() {
+    local symlink_dir
+    local -a names
+    symlink_dir="$(_skills_symlink_dir)"
+    names=( ${(f)"$(ls -1 "$symlink_dir" 2>/dev/null)"} )
+    _describe 'skill' names
+}
+
+_skills_inactive_names() {
+    local lib_home
+    local symlink_dir
+    local -a all active inactive
+    lib_home="$(_skills_library_home)"
+    symlink_dir="$(_skills_symlink_dir)"
+    all=( ${(f)"$(ls -1 "$lib_home/skills" 2>/dev/null | grep -v '^\.')"} )
+    active=( ${(f)"$(ls -1 "$symlink_dir" 2>/dev/null)"} )
+    inactive=( ${all:|active} )
+    _describe 'skill' inactive
+}
+
+_skills_categories() {
+    local lib_home
+    local -a cats
+    lib_home="$(_skills_library_home)"
+    cats=( ${(f)"$(grep -E '^[a-zA-Z0-9_-]+:' "$lib_home/categories.yaml" 2>/dev/null | sed 's/://')"} )
+    _describe 'category' cats
+}
+
+_skills_profiles() {
+    local lib_home
+    local -a profiles
+    lib_home="$(_skills_library_home)"
+    profiles=( ${(f)"$(ls -1 "$lib_home/profiles"/*.txt 2>/dev/null | xargs -I{} basename {} .txt)"} )
+    _describe 'profile' profiles
+}
+
+_skills() {
+    local cmd_idx cmd
+    local -a commands
+    commands=(
+        'list:List skills (default: all with status)'
+        'enable:Enable skill(s) by creating symlinks'
+        'disable:Disable skill(s) by removing symlinks'
+        'status:Show summary by category'
+        'search:Search skill names and descriptions'
+        'profile:Save, load, or list profiles'
+        'categories:List available categories'
+        'help:Show help message'
+    )
+
+    if (( CURRENT == 2 )); then
+        _values 'global option or command' '--target' commands
+        return
+    fi
+
+    if [[ "${words[2]}" == "--target" && CURRENT == 3 ]]; then
+        _values 'target' claude codex
+        return
+    fi
+
+    cmd_idx="$(_skills_command_index)"
+    if [[ "$cmd_idx" == "0" ]]; then
+        _describe 'command' commands
+        return
+    fi
+
+    if (( CURRENT == cmd_idx )); then
+        _describe 'command' commands
+        return
+    fi
+
+    cmd="${words[cmd_idx]}"
+    case "$cmd" in
+        list)
+            _arguments \
+                '--target=[Target runtime]:target:(claude codex)' \
+                '(-a --active -i --inactive)'{-a,--active}'[Active skills only]' \
+                '(-i --inactive -a --active)'{-i,--inactive}'[Inactive skills only]' \
+                '(-c --category)'{-c,--category}'[Filter by category]:category:_skills_categories' \
+                '(-v --verbose)'{-v,--verbose}'[Show descriptions]'
+            ;;
+        enable)
+            _arguments \
+                '--target=[Target runtime]:target:(claude codex)' \
+                '(-c --category)'{-c,--category}'[Enable all in category]:category:_skills_categories' \
+                '*:skill:_skills_inactive_names'
+            ;;
+        disable)
+            _arguments \
+                '--target=[Target runtime]:target:(claude codex)' \
+                '(-c --category)'{-c,--category}'[Disable all in category]:category:_skills_categories' \
+                '*:skill:_skills_active_names'
+            ;;
+        search)
+            _arguments '--target=[Target runtime]:target:(claude codex)'
+            _message 'search query'
+            ;;
+        profile)
+            if (( CURRENT == cmd_idx + 1 )); then
+                local -a subcmds
+                subcmds=(
+                    'save:Save current active set'
+                    'load:Load a saved profile'
+                    'list:List saved profiles'
+                )
+                _describe 'subcommand' subcmds
+            elif (( CURRENT == cmd_idx + 2 )); then
+                case "${words[cmd_idx+1]}" in
+                    load) _skills_profiles ;;
+                    save) _message 'profile name' ;;
+                esac
+            fi
+            ;;
+        status|categories|help)
+            _arguments '--target=[Target runtime]:target:(claude codex)'
+            ;;
+    esac
+}
+
+_skills "$@"

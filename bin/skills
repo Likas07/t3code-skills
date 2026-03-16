@@ -1,0 +1,583 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SKILL_LIBRARY_HOME="$HOME/.skill-library"
+SKILLS_DIR="$SKILL_LIBRARY_HOME/skills"
+CATEGORIES_FILE="$SKILL_LIBRARY_HOME/categories.yaml"
+PROFILES_DIR="$SKILL_LIBRARY_HOME/profiles"
+ARCHIVED_DIR="$SKILLS_DIR/.archived"
+TARGET="${SKILLS_TARGET:-codex}"
+SYMLINK_DIR=""
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+DIM='\033[2m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+usage() {
+    cat <<'EOF'
+Usage: skills <command> [options]
+
+Global options:
+  --target <claude|codex> Select target runtime for active symlinks
+                          (default: codex, or $SKILLS_TARGET if set)
+
+Commands:
+  list                     List skills (default: all, with status)
+    -a, --active           Active skills only
+    -i, --inactive         Inactive skills only
+    -c, --category <name>  Filter by category
+    -v, --verbose          Show descriptions
+
+  enable <name> [...]      Enable skill(s) by creating symlinks
+    -c, --category <name>  Enable all skills in category
+
+  disable <name> [...]     Disable skill(s) by removing symlinks
+    -c, --category <name>  Disable all skills in category
+
+  status                   Show summary: active/total, by category
+
+  search <query>           Search skill names and descriptions (ripgrep)
+
+  profile save <name>      Save current active set as a profile
+  profile load <name>      Load a saved profile (enable its skills, disable others)
+  profile list             List saved profiles
+
+  categories               List available categories
+
+  help                     Show this help message
+EOF
+}
+
+resolve_target() {
+    case "$1" in
+        claude) SYMLINK_DIR="$HOME/.claude/skills" ;;
+        codex)  SYMLINK_DIR="$HOME/.codex/skills" ;;
+        *)
+            echo -e "${RED}Unknown target: $1${RESET}"
+            echo "Supported targets: claude codex"
+            exit 1
+            ;;
+    esac
+}
+
+ensure_symlink_dir() {
+    mkdir -p "$SYMLINK_DIR"
+}
+
+# --- Helpers ---
+
+# Get all skill directory names (excluding archived and dotfiles)
+all_skills() {
+    ls -1 "$SKILLS_DIR" 2>/dev/null | grep -v '^\.'
+}
+
+# Check if a skill is active (symlink exists in SYMLINK_DIR)
+is_active() {
+    [[ -L "$SYMLINK_DIR/$1" ]]
+}
+
+# Extract description from SKILL.md frontmatter (handles both inline and multiline |)
+get_description() {
+    local skill_md="$SKILLS_DIR/$1/SKILL.md"
+    [[ -f "$skill_md" ]] || return 0
+    local in_front=0 in_desc=0 desc=""
+    while IFS= read -r line; do
+        if [[ "$line" == "---" ]]; then
+            if [[ $in_front -eq 1 ]]; then break; fi
+            in_front=1; continue
+        fi
+        [[ $in_front -eq 0 ]] && continue
+        # Inline description: "description: some text"
+        if [[ "$line" =~ ^description:[[:space:]]+[^\|] ]]; then
+            desc="${line#description: }"
+            desc="${desc#\"}"
+            desc="${desc%\"}"
+            echo "$desc"
+            return
+        fi
+        # Multiline start: "description: |" or "description: >"
+        if [[ "$line" =~ ^description:[[:space:]]*(\||\>) ]]; then
+            in_desc=1; continue
+        fi
+        # Multiline continuation (indented lines)
+        if [[ $in_desc -eq 1 ]]; then
+            if [[ "$line" =~ ^[[:space:]]+ ]]; then
+                local trimmed="${line#"${line%%[![:space:]]*}"}"
+                if [[ -z "$desc" ]]; then
+                    desc="$trimmed"
+                else
+                    desc="$desc $trimmed"
+                fi
+            else
+                break
+            fi
+        fi
+    done < "$skill_md"
+    [[ -n "$desc" ]] && echo "$desc"
+}
+
+# Parse categories.yaml (simple parser — no yaml dependency)
+# Returns skill names for a given category
+skills_in_category() {
+    local cat="$1"
+    local in_cat=0
+    while IFS= read -r line; do
+        # Skip comments and blank lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// /}" ]] && continue
+        # Category header
+        if [[ "$line" =~ ^([a-zA-Z0-9_-]+): ]]; then
+            if [[ "${BASH_REMATCH[1]}" == "$cat" ]]; then
+                in_cat=1
+            else
+                [[ $in_cat -eq 1 ]] && break
+                in_cat=0
+            fi
+            continue
+        fi
+        # Skill entry under current category
+        if [[ $in_cat -eq 1 && "$line" =~ ^[[:space:]]+-[[:space:]]+(.+) ]]; then
+            echo "${BASH_REMATCH[1]}"
+        fi
+    done < "$CATEGORIES_FILE"
+}
+
+# Get category for a skill
+category_of() {
+    local skill="$1"
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// /}" ]] && continue
+        if [[ "$line" =~ ^([a-zA-Z0-9_-]+): ]]; then
+            current_cat="${BASH_REMATCH[1]}"
+            continue
+        fi
+        if [[ "$line" =~ ^[[:space:]]+-[[:space:]]+(.+) ]]; then
+            if [[ "${BASH_REMATCH[1]}" == "$skill" ]]; then
+                echo "$current_cat"
+                return
+            fi
+        fi
+    done < "$CATEGORIES_FILE"
+    echo "uncategorized"
+}
+
+# List all category names
+all_categories() {
+    grep -E '^[a-zA-Z0-9_-]+:' "$CATEGORIES_FILE" | sed 's/://'
+}
+
+# --- Commands ---
+
+cmd_list() {
+    local filter="all" category="" verbose=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -a|--active)   filter="active"; shift ;;
+            -i|--inactive) filter="inactive"; shift ;;
+            -c|--category) category="$2"; shift 2 ;;
+            -v|--verbose)  verbose=1; shift ;;
+            *) echo "Unknown option: $1"; exit 1 ;;
+        esac
+    done
+
+    local skills
+    if [[ -n "$category" ]]; then
+        skills=$(skills_in_category "$category")
+        if [[ -z "$skills" ]]; then
+            echo -e "${RED}Unknown category: $category${RESET}"
+            echo "Available: $(all_categories | tr '\n' ' ')"
+            exit 1
+        fi
+    else
+        skills=$(all_skills)
+    fi
+
+    local active_count=0 inactive_count=0
+
+    while IFS= read -r skill; do
+        [[ -z "$skill" ]] && continue
+        if is_active "$skill"; then
+            if [[ "$filter" == "inactive" ]]; then continue; fi
+            active_count=$((active_count + 1))
+            printf "${GREEN}●${RESET} %-40s" "$skill"
+            if [[ -n "$category" ]]; then
+                printf " "
+            else
+                printf " ${DIM}%-18s${RESET}" "[$(category_of "$skill")]"
+            fi
+        else
+            if [[ "$filter" == "active" ]]; then continue; fi
+            inactive_count=$((inactive_count + 1))
+            printf "${DIM}○${RESET} %-40s" "$skill"
+            if [[ -n "$category" ]]; then
+                printf " "
+            else
+                printf " ${DIM}%-18s${RESET}" "[$(category_of "$skill")]"
+            fi
+        fi
+        if [[ $verbose -eq 1 ]]; then
+            local desc
+            desc=$(get_description "$skill")
+            if [[ -n "$desc" ]]; then
+                # Truncate to 80 chars
+                [[ ${#desc} -gt 80 ]] && desc="${desc:0:77}..."
+                printf "${DIM}%s${RESET}" "$desc"
+            fi
+        fi
+        echo
+    done <<< "$skills"
+
+    if [[ "$filter" == "all" ]]; then
+        echo
+        echo -e "${GREEN}●${RESET} $active_count active  ${DIM}○${RESET} $inactive_count inactive"
+    fi
+}
+
+cmd_enable() {
+    local names=() category=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -c|--category) category="$2"; shift 2 ;;
+            *) names+=("$1"); shift ;;
+        esac
+    done
+
+    if [[ -n "$category" ]]; then
+        while IFS= read -r skill; do
+            [[ -n "$skill" ]] && names+=("$skill")
+        done <<< "$(skills_in_category "$category")"
+        if [[ ${#names[@]} -eq 0 ]]; then
+            echo -e "${RED}Unknown category: $category${RESET}"
+            exit 1
+        fi
+    fi
+
+    if [[ ${#names[@]} -eq 0 ]]; then
+        echo "Usage: skills enable <name> [...] | -c <category>"
+        exit 1
+    fi
+
+    for name in "${names[@]}"; do
+        local target="$SKILLS_DIR/$name"
+        local link="$SYMLINK_DIR/$name"
+
+        if [[ ! -d "$target" ]]; then
+            echo -e "${RED}✗${RESET} $name — skill directory not found"
+            continue
+        fi
+
+        if [[ -L "$link" ]]; then
+            echo -e "${DIM}  $name — already active${RESET}"
+            continue
+        fi
+
+        ln -s "$target" "$link"
+        echo -e "${GREEN}✓${RESET} $name — enabled"
+    done
+}
+
+cmd_disable() {
+    local names=() category=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -c|--category) category="$2"; shift 2 ;;
+            *) names+=("$1"); shift ;;
+        esac
+    done
+
+    if [[ -n "$category" ]]; then
+        while IFS= read -r skill; do
+            [[ -n "$skill" ]] && names+=("$skill")
+        done <<< "$(skills_in_category "$category")"
+        if [[ ${#names[@]} -eq 0 ]]; then
+            echo -e "${RED}Unknown category: $category${RESET}"
+            exit 1
+        fi
+    fi
+
+    if [[ ${#names[@]} -eq 0 ]]; then
+        echo "Usage: skills disable <name> [...] | -c <category>"
+        exit 1
+    fi
+
+    for name in "${names[@]}"; do
+        local link="$SYMLINK_DIR/$name"
+
+        if [[ ! -L "$link" ]]; then
+            echo -e "${DIM}  $name — already inactive${RESET}"
+            continue
+        fi
+
+        rm "$link"
+        echo -e "${YELLOW}✗${RESET} $name — disabled"
+    done
+}
+
+cmd_status() {
+    local total active=0 inactive=0
+    local -A cat_active cat_total
+
+    while IFS= read -r skill; do
+        [[ -z "$skill" ]] && continue
+        local cat
+        cat=$(category_of "$skill")
+        cat_total[$cat]=$(( ${cat_total[$cat]:-0} + 1 ))
+        if is_active "$skill"; then
+            active=$((active + 1))
+            cat_active[$cat]=$(( ${cat_active[$cat]:-0} + 1 ))
+        else
+            inactive=$((inactive + 1))
+        fi
+    done <<< "$(all_skills)"
+
+    total=$((active + inactive))
+
+    echo -e "${BOLD}Skills Status${RESET}"
+    echo -e "  Total:    $total"
+    echo -e "  Active:   ${GREEN}$active${RESET}"
+    echo -e "  Inactive: ${DIM}$inactive${RESET}"
+
+    local archived
+    archived=$(ls -1 "$ARCHIVED_DIR" 2>/dev/null | wc -l)
+    if [[ $archived -gt 0 ]]; then
+        echo -e "  Archived: ${DIM}$archived${RESET}"
+    fi
+
+    echo
+    echo -e "${BOLD}By Category${RESET}"
+
+    for cat in $(all_categories); do
+        local ca=${cat_active[$cat]:-0}
+        local ct=${cat_total[$cat]:-0}
+        local bar=""
+        if [[ $ct -gt 0 ]]; then
+            local filled=$((ca * 10 / ct))
+            local empty=$((10 - filled))
+            local fchars="" echars=""
+            for ((j=0; j<filled; j++)); do fchars+="█"; done
+            for ((j=0; j<empty; j++)); do echars+="░"; done
+            bar="\033[0;32m${fchars}\033[2m${echars}\033[0m"
+        fi
+        printf "  %-20s $(echo -e "$bar") \033[0;36m%d\033[0m/\033[2m%d\033[0m\n" "$cat" "$ca" "$ct"
+    done
+
+    # Uncategorized
+    local uncat=0 uncat_active=0
+    while IFS= read -r skill; do
+        [[ -z "$skill" ]] && continue
+        local cat
+        cat=$(category_of "$skill")
+        if [[ "$cat" == "uncategorized" ]]; then
+            uncat=$((uncat + 1))
+            is_active "$skill" && uncat_active=$((uncat_active + 1))
+        fi
+    done <<< "$(all_skills)"
+
+    if [[ $uncat -gt 0 ]]; then
+        printf "  %-20s            ${CYAN}%d${RESET}/${DIM}%d${RESET}\n" "uncategorized" "$uncat_active" "$uncat"
+    fi
+}
+
+cmd_search() {
+    if [[ $# -eq 0 ]]; then
+        echo "Usage: skills search <query>"
+        exit 1
+    fi
+
+    local query="$1"
+    local found=0
+
+    while IFS= read -r skill; do
+        [[ -z "$skill" ]] && continue
+        local skill_md="$SKILLS_DIR/$skill/SKILL.md"
+        [[ -f "$skill_md" ]] || continue
+
+        # Search name and file content with ripgrep
+        if echo "$skill" | rg -qi "$query" 2>/dev/null || rg -qli "$query" "$skill_md" 2>/dev/null; then
+            found=$((found + 1))
+            if is_active "$skill"; then
+                printf "${GREEN}●${RESET} %-35s" "$skill"
+            else
+                printf "${DIM}○${RESET} %-35s" "$skill"
+            fi
+            local desc
+            desc=$(get_description "$skill")
+            if [[ -n "$desc" ]]; then
+                [[ ${#desc} -gt 80 ]] && desc="${desc:0:77}..."
+                printf "${DIM}%s${RESET}" "$desc"
+            fi
+            echo
+        fi
+    done <<< "$(all_skills)"
+
+    if [[ $found -eq 0 ]]; then
+        echo -e "${DIM}No skills matching '$query'${RESET}"
+    else
+        echo -e "\n${DIM}$found result(s)${RESET}"
+    fi
+}
+
+cmd_profile_save() {
+    local name="$1"
+    if [[ -z "$name" ]]; then
+        echo "Usage: skills profile save <name>"
+        exit 1
+    fi
+
+    mkdir -p "$PROFILES_DIR"
+    local profile_file="$PROFILES_DIR/$name.txt"
+
+    ls -1 "$SYMLINK_DIR" > "$profile_file"
+    local count
+    count=$(wc -l < "$profile_file")
+    echo -e "${GREEN}✓${RESET} Profile '$name' saved ($count skills)"
+}
+
+cmd_profile_load() {
+    local name="$1"
+    if [[ -z "$name" ]]; then
+        echo "Usage: skills profile load <name>"
+        exit 1
+    fi
+
+    local profile_file="$PROFILES_DIR/$name.txt"
+    if [[ ! -f "$profile_file" ]]; then
+        echo -e "${RED}Profile '$name' not found${RESET}"
+        echo "Available: $(ls -1 "$PROFILES_DIR" 2>/dev/null | sed 's/\.txt$//' | tr '\n' ' ')"
+        exit 1
+    fi
+
+    # Remove all current symlinks
+    local removed=0 added=0
+    for link in "$SYMLINK_DIR"/*; do
+        [[ -L "$link" ]] || continue
+        rm "$link"
+        removed=$((removed + 1))
+    done
+
+    # Create symlinks for profile skills
+    while IFS= read -r skill; do
+        [[ -z "$skill" ]] && continue
+        local target="$SKILLS_DIR/$skill"
+        if [[ -d "$target" ]]; then
+            ln -s "$target" "$SYMLINK_DIR/$skill"
+            added=$((added + 1))
+        else
+            echo -e "${YELLOW}⚠${RESET} $skill — not found, skipping"
+        fi
+    done < "$profile_file"
+
+    echo -e "${GREEN}✓${RESET} Profile '$name' loaded ($added enabled, $removed previously disabled)"
+}
+
+cmd_profile_list() {
+    if [[ ! -d "$PROFILES_DIR" ]] || [[ -z "$(ls -A "$PROFILES_DIR" 2>/dev/null)" ]]; then
+        echo -e "${DIM}No saved profiles${RESET}"
+        return
+    fi
+
+    echo -e "${BOLD}Saved Profiles${RESET}"
+    for f in "$PROFILES_DIR"/*.txt; do
+        local name
+        name=$(basename "$f" .txt)
+        local count
+        count=$(wc -l < "$f")
+        echo -e "  ${CYAN}$name${RESET} ($count skills)"
+    done
+}
+
+cmd_categories() {
+    if [[ ! -f "$CATEGORIES_FILE" ]]; then
+        echo -e "${RED}Categories file not found: $CATEGORIES_FILE${RESET}"
+        exit 1
+    fi
+
+    echo -e "${BOLD}Categories${RESET}"
+    for cat in $(all_categories); do
+        local count
+        count=$(skills_in_category "$cat" | wc -l)
+        printf "  ${CYAN}%-20s${RESET} %d skills\n" "$cat" "$count"
+    done
+}
+
+# --- Main ---
+
+filtered_args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --target)
+            if [[ $# -lt 2 ]]; then
+                echo "Usage: skills --target <claude|codex> <command> [options]"
+                exit 1
+            fi
+            TARGET="$2"
+            shift 2
+            ;;
+        --target=*)
+            TARGET="${1#--target=}"
+            shift
+            ;;
+        *)
+            filtered_args+=("$1")
+            shift
+            ;;
+    esac
+done
+
+set -- "${filtered_args[@]}"
+
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
+
+case "$1" in
+    help|-h|--help)
+        usage
+        exit 0
+        ;;
+esac
+
+resolve_target "$TARGET"
+ensure_symlink_dir
+
+command="$1"
+shift
+
+case "$command" in
+    list)       cmd_list "$@" ;;
+    enable)     cmd_enable "$@" ;;
+    disable)    cmd_disable "$@" ;;
+    status)     cmd_status ;;
+    search)     cmd_search "$@" ;;
+    categories) cmd_categories ;;
+    profile)
+        if [[ $# -eq 0 ]]; then
+            echo "Usage: skills profile <save|load|list> [name]"
+            exit 1
+        fi
+        subcmd="$1"; shift
+        case "$subcmd" in
+            save) cmd_profile_save "${1:-}" ;;
+            load) cmd_profile_load "${1:-}" ;;
+            list) cmd_profile_list ;;
+            *)    echo "Unknown profile command: $subcmd"; exit 1 ;;
+        esac
+        ;;
+    help|--help|-h) usage ;;
+    *)
+        echo "Unknown command: $command"
+        usage
+        exit 1
+        ;;
+esac
